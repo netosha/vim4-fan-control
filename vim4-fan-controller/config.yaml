@@ -1,0 +1,51 @@
+---
+name: "VIM4 Fan Controller"
+version: "0.1.0"
+slug: vim4_fan
+description: "Native fan control for Khadas VIM4 via /sys/class/fan, exposed over MQTT Discovery"
+url: "https://github.com/netosha/vim4-fan-control"
+arch:
+  - aarch64
+startup: services
+boot: auto
+init: false
+
+# full_access is required so the container sees the host's /sys read-write.
+# Without it, writes to /sys/class/fan/* return EACCES (see README for details).
+# full_access already implies every privileged capability, so we don't need a
+# separate `privileged:` list.
+full_access: true
+host_network: false
+apparmor: true
+
+map:
+  - type: addon_config
+    read_only: false
+
+services:
+  - mqtt:need
+
+options:
+  poll_seconds: 10
+  default_mode: auto
+  trigger_temp_low: 45
+  trigger_temp_mid: 55
+  trigger_temp_high: 65
+  mqtt_discovery_prefix: homeassistant
+  mqtt_base_topic: vim4/fan
+  log_level: info
+
+schema:
+  poll_seconds: "int(1,600)"
+  default_mode: "list(auto|manual)"
+  trigger_temp_low: "int(20,90)"
+  trigger_temp_mid: "int(20,90)"
+  trigger_temp_high: "int(20,90)"
+  mqtt_discovery_prefix: "str"
+  mqtt_base_topic: "str"
+  log_level: "list(trace|debug|info|notice|warning|error|fatal)"
+
+# `image:` intentionally omitted. Supervisor will build the add-on locally
+# from the Dockerfile on first install. If you publish a pre-built image to
+# ghcr.io later, add something like:
+#   image: "ghcr.io/netosha/vim4-fan-{arch}"

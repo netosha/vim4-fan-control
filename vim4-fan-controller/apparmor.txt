@@ -1,0 +1,38 @@
+#include <tunables/global>
+
+profile vim4_fan flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Basic capabilities the add-on needs to run a Python process and talk to MQTT.
+  file,
+  signal,
+  network,
+
+  # Execution: bashio, python, shell helpers.
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /usr/local/bin/** ix,
+  /usr/lib/** mr,
+  /usr/local/lib/** mr,
+  /etc/** r,
+
+  # Runtime scratch dirs.
+  /run/** rwk,
+  /tmp/** rwk,
+  /data/** rw,
+  /config/** rw,
+
+  # The whole point of this add-on: the VIM4 fan sysfs nodes.
+  /sys/class/fan/** rw,
+  /sys/devices/**/fan/** rw,
+
+  # Read-only access to thermal zones for the mainline-kernel fallback.
+  /sys/class/thermal/** r,
+  /sys/devices/virtual/thermal/** r,
+
+  # proc for standard Python/bashio introspection.
+  /proc/** r,
+  /proc/*/status r,
+  /proc/*/stat r,
+}
