@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- Added a proper HA `fan.vim4_fan` entity (MQTT fan platform) with on/off
+  state and preset modes (`auto`/`low`/`mid`/`high`). `fan.turn_off` now
+  fully disables the fan; `fan.set_preset_mode` picks a speed.
+- Level / mode writes now self-heal: picking a non-off level automatically
+  flips to manual mode and enables the fan, so `select.select_option` on
+  `select.vim4_fan_level` actually starts the fan spinning.
+- Added `startup_level` config option — set to `off` to disable the fan on
+  every boot, or `low`/`mid`/`high` to force a fixed manual speed.
+
 ## 0.1.0 — initial release
 
 - Privileged add-on (`full_access: true`) that reads/writes

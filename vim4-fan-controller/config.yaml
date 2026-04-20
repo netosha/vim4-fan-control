@@ -1,6 +1,6 @@
 ---
 name: "VIM4 Fan Controller"
-version: "0.1.0"
+version: "0.2.0"
 slug: vim4_fan
 description: "Native fan control for Khadas VIM4 via /sys/class/fan, exposed over MQTT Discovery"
 url: "https://github.com/netosha/vim4-fan-control"
@@ -28,6 +28,7 @@ services:
 options:
   poll_seconds: 10
   default_mode: auto
+  startup_level: ""
   trigger_temp_low: 45
   trigger_temp_mid: 55
   trigger_temp_high: 65
@@ -38,6 +39,9 @@ options:
 schema:
   poll_seconds: "int(1,600)"
   default_mode: "list(auto|manual)"
+  # startup_level: "" honours default_mode; off disables the fan entirely;
+  # low/mid/high force manual mode at that speed on every add-on start.
+  startup_level: "list(|off|low|mid|high)"
   trigger_temp_low: "int(20,90)"
   trigger_temp_mid: "int(20,90)"
   trigger_temp_high: "int(20,90)"

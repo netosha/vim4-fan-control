@@ -12,10 +12,60 @@ Home Assistant (no `configuration.yaml` edits required):
 - `sensor.vim4_cpu_temp` — CPU temperature in °C.
 - `select.vim4_fan_mode` — `auto` (kernel trigger-temp driven) or `manual`.
 - `select.vim4_fan_level` — `off`, `low`, `mid`, `high`. Writing this
-  automatically flips the mode to `manual`.
+  automatically flips the mode to `manual` and enables the fan.
 - `switch.vim4_fan_enable` — master on/off for the fan.
+- `fan.vim4_fan` — HA fan platform entity. `fan.turn_off` fully disables
+  the fan (master gate + `enable=0`); `fan.set_preset_mode` picks one of
+  `auto` / `low` / `mid` / `high`.
 
 All entities are grouped under a single `Khadas VIM4` device in HA.
+
+## Manual overrides — two common tasks
+
+### "Disable all fan behaviour"
+
+Pick whichever is most convenient:
+
+- **Lovelace / UI:** toggle the `switch.vim4_fan_enable` entity to off, or
+  press the off button on the `fan.vim4_fan` card.
+- **Service call** (automations, scripts, dev-tools): call
+  `fan.turn_off` with target `entity_id: fan.vim4_fan`, *or* call
+  `switch.turn_off` with target `entity_id: switch.vim4_fan_enable`.
+- **At every add-on start:** set `startup_level: off` in the addon's
+  **Configuration** tab and restart. The fan will be disabled on boot.
+
+All of these write `0` to `/sys/class/fan/enable`, which is the hardware
+master gate. Nothing else — not the kernel's auto triggers, not a manual
+level write — will spin the fan until you re-enable it.
+
+### "Manually start the fan at a specific speed"
+
+- **Lovelace / UI:** on the `fan.vim4_fan` card, click the preset dropdown
+  and pick `low`, `mid`, or `high`. The fan immediately spins at that
+  speed (mode is forced to `manual` and the master switch is enabled).
+- **Service call:**
+
+  ```yaml
+  service: fan.set_preset_mode
+  target:
+    entity_id: fan.vim4_fan
+  data:
+    preset_mode: high       # or low / mid / auto
+  ```
+
+- **Via the `select` entity:**
+
+  ```yaml
+  service: select.select_option
+  target:
+    entity_id: select.vim4_fan_level
+  data:
+    option: mid
+  ```
+
+- **At every add-on start:** set `startup_level: mid` (or `low`/`high`) in
+  **Configuration** → restart. The fan always comes up at that speed in
+  manual mode after boot or reboot, regardless of temperature.
 
 ## Requirements
 
@@ -53,7 +103,8 @@ Home Assistant displays a yellow warning on install because of
 | Option | Default | Description |
 | --- | --- | --- |
 | `poll_seconds` | `10` | How often (seconds) sysfs is polled and state republished. |
-| `default_mode` | `auto` | Fan mode applied on add-on start. `auto` lets the kernel drive speed from trigger temps; `manual` holds whatever level was last set. |
+| `default_mode` | `auto` | Fan mode applied on add-on start when `startup_level` is empty. `auto` lets the kernel drive speed from trigger temps; `manual` holds whatever level was last set. |
+| `startup_level` | `""` | Overrides `default_mode` at boot. `""` = use `default_mode`. `off` = disable the fan entirely (`enable=0`). `low`/`mid`/`high` = force manual mode at that speed. |
 | `trigger_temp_low` | `45` | Auto-mode threshold (°C) for low speed. |
 | `trigger_temp_mid` | `55` | Auto-mode threshold (°C) for mid speed. |
 | `trigger_temp_high` | `65` | Auto-mode threshold (°C) for high speed. |

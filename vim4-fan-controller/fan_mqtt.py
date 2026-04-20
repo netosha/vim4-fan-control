@@ -8,7 +8,19 @@ Discovery entities:
   - sensor.vim4_cpu_temp     (°C, read-only)
   - select.vim4_fan_mode     (auto | manual)
   - select.vim4_fan_level    (off | low | mid | high)
-  - binary_sensor.vim4_fan_enable (on/off mirror of /sys/class/fan/enable)
+  - switch.vim4_fan_enable   (master gate on /sys/class/fan/enable)
+  - fan.vim4_fan             (HA fan platform: on/off + preset auto/low/mid/high)
+
+Two ways to drive the fan are exposed for convenience:
+
+  1. "High-level" via fan.vim4_fan — fan.turn_off disables the fan completely
+     (enable=0), and fan.set_preset_mode picks auto/low/mid/high.
+
+  2. "Low-level" via the select/switch entities — pick a level from the
+     select, or flip the master switch off to cut power. Commands are
+     self-healing: setting level=low/mid/high automatically enables the fan
+     and forces manual mode, setting level=off cuts the master switch, and
+     setting mode=auto or manual re-enables the fan.
 
 State flow:
     poll loop  -> read sysfs -> publish retained state topics
@@ -250,6 +262,24 @@ class Bridge:
     def enable_command_topic(self) -> str:
         return f"{self.base}/enable/set"
 
+    # Topics for the high-level HA `fan` entity. These translate fan.turn_off
+    # / fan.set_preset_mode calls into writes against mode/level/enable.
+    @property
+    def fan_state_topic(self) -> str:
+        return f"{self.base}/fan/state"
+
+    @property
+    def fan_command_topic(self) -> str:
+        return f"{self.base}/fan/state/set"
+
+    @property
+    def fan_preset_state_topic(self) -> str:
+        return f"{self.base}/fan/preset"
+
+    @property
+    def fan_preset_command_topic(self) -> str:
+        return f"{self.base}/fan/preset/set"
+
     # ---- Lifecycle ------------------------------------------------------
     def run(self) -> None:
         log.info(
@@ -261,14 +291,29 @@ class Bridge:
         self.client.connect_async(self.args.mqtt_host, self.args.mqtt_port, keepalive=60)
         self.client.loop_start()
 
-        # Apply default mode once on startup (if backend supports it).
+        # Apply default mode (and optionally a manual startup level) once on
+        # startup. Sequence: enable=1, mode, level — so the fan actually runs.
         if self.backend.supports_control:
             try:
-                default = NAME_TO_MODE[self.args.default_mode]
-                self.backend.write_mode(default)
-                log.info("Set initial fan mode to %s", self.args.default_mode)
+                startup_level = (self.args.startup_level or "").strip().lower() or None
+                if startup_level == "off":
+                    # Explicit "off" overrides default_mode — kill the fan.
+                    self.backend.write_mode(NAME_TO_MODE["manual"])
+                    self.backend.write_level(0)
+                    self.backend.write_enable(0)
+                    log.info("Startup: fan disabled (startup_level=off)")
+                elif startup_level in ("low", "mid", "high"):
+                    self.backend.write_enable(1)
+                    self.backend.write_mode(NAME_TO_MODE["manual"])
+                    self.backend.write_level(NAME_TO_LEVEL[startup_level])
+                    log.info("Startup: manual mode at level=%s", startup_level)
+                else:
+                    default = NAME_TO_MODE[self.args.default_mode]
+                    self.backend.write_enable(1)
+                    self.backend.write_mode(default)
+                    log.info("Startup: fan mode = %s", self.args.default_mode)
             except Exception as exc:  # noqa: BLE001
-                log.warning("Failed to apply default_mode: %s", exc)
+                log.warning("Failed to apply startup state: %s", exc)
 
         try:
             while not self.stop_event.is_set():
@@ -304,6 +349,8 @@ class Bridge:
                     (self.mode_command_topic, 0),
                     (self.level_command_topic, 0),
                     (self.enable_command_topic, 0),
+                    (self.fan_command_topic, 0),
+                    (self.fan_preset_command_topic, 0),
                 ]
             )
         if subs:
@@ -337,6 +384,10 @@ class Bridge:
                 self._handle_level_cmd(payload)
             elif topic == self.enable_command_topic:
                 self._handle_enable_cmd(payload)
+            elif topic == self.fan_command_topic:
+                self._handle_fan_state_cmd(payload)
+            elif topic == self.fan_preset_command_topic:
+                self._handle_fan_preset_cmd(payload)
             else:
                 log.debug("Unhandled topic %s", topic)
                 return
@@ -353,17 +404,28 @@ class Bridge:
         mode = NAME_TO_MODE.get(payload.lower())
         if mode is None:
             raise ValueError(f"invalid mode payload: {payload!r}")
+        # Re-enable the fan — picking a mode implies "I want the fan running".
+        self.backend.write_enable(1)
         self.backend.write_mode(mode)
-        log.info("Fan mode -> %s", payload.lower())
+        log.info("Fan mode -> %s (enable=1)", payload.lower())
 
     def _handle_level_cmd(self, payload: str) -> None:
         level = NAME_TO_LEVEL.get(payload.lower())
         if level is None:
             raise ValueError(f"invalid level payload: {payload!r}")
-        # A level write is only honored in manual mode, so switch automatically.
-        self.backend.write_mode(NAME_TO_MODE["manual"])
-        self.backend.write_level(level)
-        log.info("Fan level -> %s (forced mode=manual)", payload.lower())
+        # Self-heal: picking a specific speed should "just work". off disables
+        # the master switch too; any non-zero level forces manual mode AND
+        # enables the fan so it actually starts spinning.
+        if level == 0:
+            self.backend.write_mode(NAME_TO_MODE["manual"])
+            self.backend.write_level(0)
+            self.backend.write_enable(0)
+            log.info("Fan level -> off (enable=0)")
+        else:
+            self.backend.write_enable(1)
+            self.backend.write_mode(NAME_TO_MODE["manual"])
+            self.backend.write_level(level)
+            log.info("Fan level -> %s (mode=manual, enable=1)", payload.lower())
 
     def _handle_enable_cmd(self, payload: str) -> None:
         value = payload.strip().lower()
@@ -372,9 +434,36 @@ class Bridge:
             log.info("Fan enable -> on")
         elif value in ("off", "0", "false"):
             self.backend.write_enable(0)
-            log.info("Fan enable -> off")
+            log.info("Fan enable -> off (all fan behaviour disabled)")
         else:
             raise ValueError(f"invalid enable payload: {payload!r}")
+
+    def _handle_fan_state_cmd(self, payload: str) -> None:
+        """HA fan.turn_off / fan.turn_on. OFF fully disables the fan."""
+        value = payload.strip().lower()
+        if value in ("on", "1", "true"):
+            self.backend.write_enable(1)
+            log.info("Fan entity -> ON (enable=1)")
+        elif value in ("off", "0", "false"):
+            self.backend.write_enable(0)
+            log.info("Fan entity -> OFF (enable=0, all fan behaviour disabled)")
+        else:
+            raise ValueError(f"invalid fan state payload: {payload!r}")
+
+    def _handle_fan_preset_cmd(self, payload: str) -> None:
+        """HA fan.set_preset_mode: auto / low / mid / high."""
+        preset = payload.strip().lower()
+        if preset == "auto":
+            self.backend.write_enable(1)
+            self.backend.write_mode(NAME_TO_MODE["auto"])
+            log.info("Fan preset -> auto (enable=1)")
+        elif preset in ("low", "mid", "high"):
+            self.backend.write_enable(1)
+            self.backend.write_mode(NAME_TO_MODE["manual"])
+            self.backend.write_level(NAME_TO_LEVEL[preset])
+            log.info("Fan preset -> %s (mode=manual, enable=1)", preset)
+        else:
+            raise ValueError(f"invalid fan preset payload: {payload!r}")
 
     # ---- Discovery + state ---------------------------------------------
     def _publish_discovery(self) -> None:
@@ -430,6 +519,23 @@ class Bridge:
             }
             self._publish_disco("switch", "enable", enable_cfg)
 
+            # High-level fan entity: the obvious way to "turn the fan off" or
+            # "run the fan at a specific speed" from the HA UI or scripts.
+            fan_cfg = {
+                "name": "VIM4 Fan",
+                "unique_id": "vim4_fan",
+                "state_topic": self.fan_state_topic,
+                "command_topic": self.fan_command_topic,
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "preset_mode_state_topic": self.fan_preset_state_topic,
+                "preset_mode_command_topic": self.fan_preset_command_topic,
+                "preset_modes": ["auto", "low", "mid", "high"],
+                "availability": availability,
+                "device": DEVICE_INFO,
+            }
+            self._publish_disco("fan", "fan", fan_cfg)
+
         log.info("Published MQTT Discovery config under %s/…", self.disco)
 
     def _publish_disco(self, component: str, object_id: str, cfg: dict) -> None:
@@ -465,6 +571,21 @@ class Bridge:
         if enable is not None:
             self.client.publish(self.enable_state_topic, "on" if enable else "off", retain=True)
 
+        # Derive the high-level fan entity state from the raw sysfs values.
+        if enable is not None:
+            self.client.publish(
+                self.fan_state_topic, "ON" if enable else "OFF", retain=True
+            )
+        if mode is not None:
+            if mode == NAME_TO_MODE["auto"]:
+                preset = "auto"
+            elif level in (1, 2, 3):
+                preset = LEVEL_NAMES[level]
+            else:
+                preset = None  # manual + level=0: ambiguous; leave preset alone
+            if preset is not None:
+                self.client.publish(self.fan_preset_state_topic, preset, retain=True)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -479,6 +600,15 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument("--mqtt-pass", default="")
     parser.add_argument("--poll", type=int, default=10, help="State-publish interval, seconds")
     parser.add_argument("--default-mode", default="auto", choices=sorted(NAME_TO_MODE))
+    parser.add_argument(
+        "--startup-level",
+        default="",
+        help=(
+            "Override default_mode on startup. One of off|low|mid|high. "
+            "'off' disables the fan entirely; low/mid/high force manual mode "
+            "at that speed. Empty string = honor --default-mode."
+        ),
+    )
     parser.add_argument("--discovery-prefix", default="homeassistant")
     parser.add_argument("--base-topic", default="vim4/fan")
     parser.add_argument("--sysfs-mode", default="khadas", choices=["khadas", "thermal"])

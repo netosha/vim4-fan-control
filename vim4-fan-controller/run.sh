@@ -35,6 +35,7 @@ MQTT_PASS=$(bashio::services mqtt "password")
 
 POLL=$(bashio::config 'poll_seconds')
 DEFAULT_MODE=$(bashio::config 'default_mode')
+STARTUP_LEVEL=$(bashio::config 'startup_level')
 DISCO_PREFIX=$(bashio::config 'mqtt_discovery_prefix')
 BASE_TOPIC=$(bashio::config 'mqtt_base_topic')
 LOG_LEVEL=$(bashio::config 'log_level')
@@ -64,6 +65,7 @@ exec python3 -u /app/fan_mqtt.py \
     --mqtt-pass "$MQTT_PASS" \
     --poll "$POLL" \
     --default-mode "$DEFAULT_MODE" \
+    --startup-level "$STARTUP_LEVEL" \
     --discovery-prefix "$DISCO_PREFIX" \
     --base-topic "$BASE_TOPIC" \
     --sysfs-mode "$SYSFS_MODE" \
