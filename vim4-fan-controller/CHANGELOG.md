@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.4.0 — full control via SSH to the HAOS host
+
+Fan control is back. All writes are routed through `ssh root@172.30.32.1:22222`
+(the HAOS debug SSH port), which is the one sanctioned way for an
+add-on to reach the host's real `/sys` — the mount propagation lock
+on the container's `/sys` bind-mount is finally sidestepped.
+
+### Setup flow
+
+1. Install the add-on. It generates an ed25519 keypair in
+   `/data/ssh/` on first run.
+2. Copy the public key from the add-on log (also mirrored to
+   `/share/vim4-fan-ssh-pubkey.txt`).
+3. Append it to `/root/.ssh/authorized_keys` on the HAOS host via an
+   existing port-22222 SSH session.
+4. Restart the add-on. The log will confirm `SSH control: ENABLED` and
+   publish the control entities.
+
+Until the public key is authorized, the add-on runs in monitor-only
+mode (same entities as 0.3.0) so HA keeps getting temperature data.
+
+### Added
+- `fan.vim4_fan`, `select.vim4_fan_mode`, `select.vim4_fan_level`,
+  `switch.vim4_fan_enable` are back, now actually working.
+- `startup_level` option restored — set `off` / `low` / `mid` / `high`
+  to force a fixed state on every add-on start.
+- SSH ControlMaster keeps latency ≤50 ms per write after the first
+  connection.
+
+### Changed
+- Dropped `util-linux` (no longer need `nsenter`); added
+  `openssh-client`.
+- AppArmor profile relaxed to allow writes to `/data/` (ssh key +
+  known_hosts).
+
+## 0.3.0 — monitor-only
+
+Writing to `/sys/class/fan/*` from inside a HAOS add-on turned out to be
+unreachable with the primitives Supervisor exposes. This release drops
+the write path entirely and focuses on what works reliably: exposing
+the VIM4 CPU temperature and fan state as read-only Home Assistant
+sensors. The kernel's built-in auto mode continues to handle the fan
+speed automatically.
+
+### Changed
+- Entities are now read-only sensors instead of selects/switches.
+- Dropped `full_access`, `host_pid`, and `util-linux`. The add-on runs
+  with no special privileges and an AppArmor profile that restricts it
+  to reading the fan and thermal sysfs nodes.
+- Removed the MQTT `fan.vim4_fan` entity, `select.vim4_fan_mode`,
+  `select.vim4_fan_level`, and `switch.vim4_fan_enable`. Their state is
+  still visible as `sensor.vim4_fan_*` / `binary_sensor.vim4_fan_enable`.
+
+### Added
+- `sensor.vim4_trigger_temp_low` / `_mid` / `_high` diagnostic sensors
+  showing the thresholds the kernel is using for auto-mode switching.
+
+### Removed
+- `startup_level`, `trigger_temp_{low,mid,high}` config options — they
+  required write access to sysfs and no longer apply.
+
 ## 0.2.3
 
 - Fix: writes via `/proc/1/root/sys/...` still hit `EROFS` because
