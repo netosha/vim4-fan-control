@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -110,20 +111,57 @@ class FanBackend:
 
 
 class KhadasFanBackend(FanBackend):
-    """Legacy Khadas vendor-kernel driver at /sys/class/fan/*."""
+    """Legacy Khadas vendor-kernel driver at /sys/class/fan/*.
 
-    def __init__(self, fan_path: Path = DEFAULT_FAN_SYSFS) -> None:
+    Reads go through the (container's) fan_path directly. Writes use one of:
+
+      - "direct": plain open()+write() on fan_path. Works if the container's
+        /sys is rw.
+      - "nsenter": shell out to `nsenter -t 1 -m -- sh -c 'echo V > /sys/...'`
+        to enter the host's mount namespace and write to the host's real sysfs.
+        Required on HAOS, where the container's /sys is a locked-ro bind mount.
+    """
+
+    def __init__(
+        self,
+        fan_path: Path = DEFAULT_FAN_SYSFS,
+        write_method: str = "direct",
+        host_fan_path: str = "/sys/class/fan",
+    ) -> None:
         super().__init__("khadas")
         self.fan_path = fan_path
+        self.write_method = write_method
+        # Path as seen from INSIDE the host's mount namespace. Independent
+        # of fan_path (which is the container-visible read path).
+        self.host_fan_path = host_fan_path
+        if write_method not in ("direct", "nsenter"):
+            raise ValueError(f"unknown write_method {write_method!r}")
 
     def _read(self, name: str) -> str:
         return (self.fan_path / name).read_text().strip()
 
     def _write(self, name: str, value: str) -> None:
+        if self.write_method == "nsenter":
+            self._write_nsenter(name, value)
+        else:
+            self._write_direct(name, value)
+
+    def _write_direct(self, name: str, value: str) -> None:
         path = self.fan_path / name
-        # sysfs nodes don't accept fancy writes; a plain open/write is fine.
         with path.open("w") as fh:
             fh.write(str(value))
+
+    def _write_nsenter(self, name: str, value: str) -> None:
+        # Shell out because nsenter can't proxy a plain file-descriptor write;
+        # it has to enter the target namespace and run a command there.
+        target = f"{self.host_fan_path}/{name}"
+        cmd = ["nsenter", "-t", "1", "-m", "--", "sh", "-c", f"echo {value} > {target}"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if proc.returncode != 0:
+            raise OSError(
+                f"nsenter write {target}={value!r} failed "
+                f"(rc={proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+            )
 
     def read_temp_millicelsius(self) -> Optional[int]:
         try:
@@ -196,6 +234,7 @@ def make_backend(
     requested: str,
     fan_path: Optional[str] = None,
     thermal_path: Optional[str] = None,
+    write_method: str = "direct",
 ) -> FanBackend:
     if requested == "khadas":
         path = Path(fan_path) if fan_path else DEFAULT_FAN_SYSFS
@@ -204,8 +243,10 @@ def make_backend(
                 f"{path} missing; either the host lacks the Khadas fan "
                 "driver or full_access/host_pid is not enabled for this add-on."
             )
-        log.info("KhadasFanBackend using path: %s", path)
-        return KhadasFanBackend(path)
+        log.info(
+            "KhadasFanBackend: read path=%s, write method=%s", path, write_method
+        )
+        return KhadasFanBackend(path, write_method=write_method)
     if requested == "thermal":
         path = Path(thermal_path) if thermal_path else DEFAULT_THERMAL_ZONE
         if not (path / "temp").exists():
@@ -631,6 +672,16 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         help="Override path to the thermal-zone directory (default /sys/class/thermal/thermal_zone0).",
     )
     parser.add_argument(
+        "--write-method",
+        default="direct",
+        choices=["direct", "nsenter"],
+        help=(
+            "How to persist writes to /sys/class/fan/*. 'direct' opens the file; "
+            "'nsenter' shells out into the host's mount namespace via nsenter(1). "
+            "Use nsenter on HAOS where the container's /sys is locked ro."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="info",
         choices=["trace", "debug", "info", "notice", "warning", "error", "fatal"],
@@ -666,6 +717,7 @@ def main(argv: Optional[list] = None) -> int:
             args.sysfs_mode,
             fan_path=args.fan_path or None,
             thermal_path=args.thermal_path or None,
+            write_method=args.write_method,
         )
     except Exception as exc:  # noqa: BLE001
         log.critical("Failed to initialize fan backend: %s", exc)

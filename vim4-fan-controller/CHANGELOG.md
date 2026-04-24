@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3
+
+- Fix: writes via `/proc/1/root/sys/...` still hit `EROFS` because
+  `/proc/<pid>/root` only exposes the target process's root directory —
+  file operations still go through the caller's mount namespace. The
+  add-on now ships `util-linux` (for `nsenter`), probes whether writes
+  succeed via the container's /sys or only via the host's mount
+  namespace, and uses `nsenter -t 1 -m -- sh -c 'echo V > /sys/…'` for
+  every write when the container's sysfs is locked read-only.
+- Added startup diagnostics: the log shows PID 1's identity (to confirm
+  `host_pid: true` is in effect) and the mount flags on `/sys` inside
+  the container. If writes still fail, the log now also prints the host's
+  `mount | grep sys` output for further debugging.
+
 ## 0.2.2
 
 - Fix: writes to `/sys/class/fan/*` still failed with `EROFS` even after

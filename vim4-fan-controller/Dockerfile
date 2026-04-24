@@ -1,8 +1,12 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base:latest
 FROM $BUILD_FROM
 
-# paho-mqtt is the only runtime dep; bashio comes from the base image.
-RUN apk add --no-cache python3 py3-paho-mqtt bash
+# - python3 / py3-paho-mqtt: MQTT bridge runtime.
+# - util-linux: provides nsenter so we can enter the host's mount namespace
+#   and write to /sys/class/fan/* on the real host sysfs (the container's
+#   /sys is bind-mounted read-only and the propagation lock makes remount
+#   impossible).
+RUN apk add --no-cache python3 py3-paho-mqtt bash util-linux
 
 WORKDIR /app
 COPY run.sh /run.sh

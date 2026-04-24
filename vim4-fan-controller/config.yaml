@@ -1,6 +1,6 @@
 ---
 name: "VIM4 Fan Controller"
-version: "0.2.2"
+version: "0.2.3"
 slug: vim4_fan
 description: "Native fan control for Khadas VIM4 via /sys/class/fan, exposed over MQTT Discovery"
 url: "https://github.com/netosha/vim4-fan-control"
