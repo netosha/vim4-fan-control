@@ -48,8 +48,8 @@ import paho.mqtt.client as mqtt
 # Constants
 # ---------------------------------------------------------------------------
 
-FAN_SYSFS = Path("/sys/class/fan")
-THERMAL_ZONE = Path("/sys/class/thermal/thermal_zone0")
+DEFAULT_FAN_SYSFS = Path("/sys/class/fan")
+DEFAULT_THERMAL_ZONE = Path("/sys/class/thermal/thermal_zone0")
 
 LEVEL_NAMES: Dict[int, str] = {0: "off", 1: "low", 2: "mid", 3: "high"}
 NAME_TO_LEVEL: Dict[str, int] = {v: k for k, v in LEVEL_NAMES.items()}
@@ -112,16 +112,15 @@ class FanBackend:
 class KhadasFanBackend(FanBackend):
     """Legacy Khadas vendor-kernel driver at /sys/class/fan/*."""
 
-    def __init__(self) -> None:
+    def __init__(self, fan_path: Path = DEFAULT_FAN_SYSFS) -> None:
         super().__init__("khadas")
+        self.fan_path = fan_path
 
-    @staticmethod
-    def _read(name: str) -> str:
-        return (FAN_SYSFS / name).read_text().strip()
+    def _read(self, name: str) -> str:
+        return (self.fan_path / name).read_text().strip()
 
-    @staticmethod
-    def _write(name: str, value: str) -> None:
-        path = FAN_SYSFS / name
+    def _write(self, name: str, value: str) -> None:
+        path = self.fan_path / name
         # sysfs nodes don't accept fancy writes; a plain open/write is fine.
         with path.open("w") as fh:
             fh.write(str(value))
@@ -181,29 +180,38 @@ class ThermalFanBackend(FanBackend):
     Control is not possible without a kernel driver, but we still expose the
     temperature so automations have something to trigger on."""
 
-    def __init__(self) -> None:
+    def __init__(self, thermal_path: Path = DEFAULT_THERMAL_ZONE) -> None:
         super().__init__("thermal")
+        self.thermal_path = thermal_path
 
     def read_temp_millicelsius(self) -> Optional[int]:
         try:
-            return int((THERMAL_ZONE / "temp").read_text().strip())
+            return int((self.thermal_path / "temp").read_text().strip())
         except (OSError, ValueError) as exc:
             log.debug("thermal temp read failed: %s", exc)
             return None
 
 
-def make_backend(requested: str) -> FanBackend:
+def make_backend(
+    requested: str,
+    fan_path: Optional[str] = None,
+    thermal_path: Optional[str] = None,
+) -> FanBackend:
     if requested == "khadas":
-        if not FAN_SYSFS.is_dir():
+        path = Path(fan_path) if fan_path else DEFAULT_FAN_SYSFS
+        if not path.is_dir():
             raise RuntimeError(
-                f"{FAN_SYSFS} missing; either the host lacks the Khadas fan "
-                "driver or full_access is not enabled for this add-on."
+                f"{path} missing; either the host lacks the Khadas fan "
+                "driver or full_access/host_pid is not enabled for this add-on."
             )
-        return KhadasFanBackend()
+        log.info("KhadasFanBackend using path: %s", path)
+        return KhadasFanBackend(path)
     if requested == "thermal":
-        if not (THERMAL_ZONE / "temp").exists():
-            raise RuntimeError(f"{THERMAL_ZONE / 'temp'} missing; no thermal fallback available")
-        return ThermalFanBackend()
+        path = Path(thermal_path) if thermal_path else DEFAULT_THERMAL_ZONE
+        if not (path / "temp").exists():
+            raise RuntimeError(f"{path / 'temp'} missing; no thermal fallback available")
+        log.info("ThermalFanBackend using path: %s", path)
+        return ThermalFanBackend(path)
     raise ValueError(f"unknown sysfs mode {requested!r}")
 
 
@@ -613,6 +621,16 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument("--base-topic", default="vim4/fan")
     parser.add_argument("--sysfs-mode", default="khadas", choices=["khadas", "thermal"])
     parser.add_argument(
+        "--fan-path",
+        default="",
+        help="Override path to the Khadas fan sysfs directory (default /sys/class/fan).",
+    )
+    parser.add_argument(
+        "--thermal-path",
+        default="",
+        help="Override path to the thermal-zone directory (default /sys/class/thermal/thermal_zone0).",
+    )
+    parser.add_argument(
         "--log-level",
         default="info",
         choices=["trace", "debug", "info", "notice", "warning", "error", "fatal"],
@@ -644,7 +662,11 @@ def main(argv: Optional[list] = None) -> int:
     configure_logging(args.log_level)
 
     try:
-        backend = make_backend(args.sysfs_mode)
+        backend = make_backend(
+            args.sysfs_mode,
+            fan_path=args.fan_path or None,
+            thermal_path=args.thermal_path or None,
+        )
     except Exception as exc:  # noqa: BLE001
         log.critical("Failed to initialize fan backend: %s", exc)
         return 2

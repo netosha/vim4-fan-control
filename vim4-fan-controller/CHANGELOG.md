@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2
+
+- Fix: writes to `/sys/class/fan/*` still failed with `EROFS` even after
+  remount, because Supervisor's bind-mount of `/sys` is locked read-only
+  and the ro flag propagates through `remount,rw`. The add-on now enables
+  `host_pid: true` and routes writes through `/proc/1/root/sys/class/fan`,
+  which is the host's real (rw) sysfs.
+- `run.sh` probes both paths at startup with a round-trip write test and
+  picks the one that actually works. Falls back to the other automatically
+  if either is unavailable.
+- `fan_mqtt.py` now accepts `--fan-path` / `--thermal-path` so the sysfs
+  location is resolved in the shell wrapper rather than hard-coded.
+
 ## 0.2.1
 
 - Fix: `/sys/class/fan/*` writes failed with `[Errno 30] Read-only file
