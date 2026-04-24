@@ -8,6 +8,17 @@ profile vim4_fan flags=(attach_disconnected,mediate_deleted) {
   signal,
   network,
 
+  # Capabilities required to remount /sys rw at startup (full_access
+  # implies these, but AppArmor still has to allow them explicitly).
+  capability sys_admin,
+  capability dac_override,
+  capability dac_read_search,
+
+  # Allow remounting /sys read-write. Supervisor mounts /sys ro by default
+  # even in full_access mode; run.sh fixes that at startup.
+  mount options=(rw, remount) -> /sys/,
+  mount options=(rw, remount) -> /sys/class/fan/,
+
   # Execution: bashio, python, shell helpers.
   /init ix,
   /bin/** ix,

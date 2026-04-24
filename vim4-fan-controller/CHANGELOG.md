@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Fix: `/sys/class/fan/*` writes failed with `[Errno 30] Read-only file
+  system` even with `full_access: true`, because Supervisor mounts `/sys`
+  read-only inside add-on containers. `run.sh` now remounts `/sys` rw at
+  startup.
+- Disabled the custom AppArmor profile (`apparmor: false`). Supervisor's
+  AppArmor parser rejects profiles with `mount` clauses, which were needed
+  for the remount. The profile is still shipped for reference.
+
 ## 0.2.0
 
 - Added a proper HA `fan.vim4_fan` entity (MQTT fan platform) with on/off

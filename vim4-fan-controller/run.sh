@@ -7,10 +7,35 @@ set -e
 
 bashio::log.info "Starting VIM4 Fan Controller..."
 
+# ----- Remount /sys rw ------------------------------------------------------
+# Supervisor mounts /sys read-only inside add-on containers even when
+# full_access: true is set. CAP_SYS_ADMIN (implied by full_access) lets us
+# remount it read-write so /sys/class/fan/* is writable.
+remount_rw() {
+    local target="$1"
+    if mount | grep -E "on ${target} .*\(ro[, ]" >/dev/null 2>&1; then
+        if mount -o remount,rw "$target" 2>/dev/null; then
+            bashio::log.info "Remounted ${target} read-write"
+        else
+            bashio::log.warning "Failed to remount ${target} rw — writes may fail"
+        fi
+    fi
+}
+
+remount_rw /sys
+# Some kernels mount the fan class on its own sysfs node; try it too.
+remount_rw /sys/class/fan
+
 # ----- Detect sysfs layout --------------------------------------------------
 if [ -d /sys/class/fan ]; then
     bashio::log.info "Detected legacy Khadas fan driver at /sys/class/fan"
     SYSFS_MODE="khadas"
+    # Verify a canonical node is actually writable now.
+    if [ ! -w /sys/class/fan/enable ]; then
+        bashio::log.error "/sys/class/fan/enable is still not writable."
+        bashio::log.error "Confirm that full_access: true is set and the add-on"
+        bashio::log.error "was fully stopped/started (not just restarted) after enabling it."
+    fi
 elif [ -f /sys/class/thermal/thermal_zone0/trip_point_3_temp ]; then
     bashio::log.warning "Khadas fan driver not found; falling back to /sys/class/thermal"
     SYSFS_MODE="thermal"

@@ -1,6 +1,6 @@
 ---
 name: "VIM4 Fan Controller"
-version: "0.2.0"
+version: "0.2.1"
 slug: vim4_fan
 description: "Native fan control for Khadas VIM4 via /sys/class/fan, exposed over MQTT Discovery"
 url: "https://github.com/netosha/vim4-fan-control"
@@ -16,7 +16,14 @@ init: false
 # separate `privileged:` list.
 full_access: true
 host_network: false
-apparmor: true
+
+# AppArmor disabled: we need to remount /sys rw at startup (Supervisor mounts
+# it read-only even under full_access), and custom AppArmor profiles with
+# mount clauses are often rejected by Supervisor's policy parser. Inside a
+# full_access container, AppArmor confinement is largely neutralized by
+# CAP_SYS_ADMIN anyway. The apparmor.txt profile is shipped for reference and
+# can be re-enabled with `apparmor: true` if desired.
+apparmor: false
 
 map:
   - type: addon_config
